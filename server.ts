@@ -18,20 +18,21 @@ const PORT = 3000;
 
 app.use(express.json());
 
-const upload = multer({ dest: 'uploads/' });
+const upload = multer({ dest: '/tmp' });
 
 // Database setup
 let supabase: any;
-async function setupDb() {
-  const supabaseUrl = process.env.SUPABASE_URL;
-  const supabaseKey = process.env.SUPABASE_ANON_KEY;
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_ANON_KEY;
 
-  if (!supabaseUrl || !supabaseKey) {
-    console.warn('Missing SUPABASE_URL or SUPABASE_ANON_KEY. Database features will not work until configured.');
-    return;
-  }
-
+if (supabaseUrl && supabaseKey) {
   supabase = createClient(supabaseUrl, supabaseKey);
+} else {
+  console.warn('Missing SUPABASE_URL or SUPABASE_ANON_KEY. Database features will not work until configured.');
+}
+
+async function setupDb() {
+  // Kept for backwards compatibility if called elsewhere
 }
 
 // API Routes
@@ -191,7 +192,7 @@ app.get('/api/admin/summary', async (req, res) => {
   }
 });
 
-app.post('/api/report', async (req, res) => {
+app.all('/api/report', async (req, res) => {
   try {
     await generateAndSendReport();
     res.json({ success: true, message: 'Report generated and sent' });
@@ -330,7 +331,7 @@ async function startServer() {
   await setupDb();
 
   // Vite middleware for development
-  if (process.env.NODE_ENV !== 'production') {
+  if (process.env.NODE_ENV !== 'production' && !process.env.VERCEL) {
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
@@ -344,9 +345,13 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server running on http://localhost:${PORT}`);
-  });
+  if (!process.env.VERCEL) {
+    app.listen(PORT, '0.0.0.0', () => {
+      console.log(`Server running on http://localhost:${PORT}`);
+    });
+  }
 }
 
 startServer();
+
+export default app;
