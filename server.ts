@@ -17,8 +17,8 @@ const upload = multer({ dest: '/tmp' });
 
 // Database setup
 let supabase: any;
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_ANON_KEY;
+const supabaseUrl = process.env.https://ilwelyzsbovpvzyddrep.supabase.co;
+const supabaseKey = process.env.sb_publishable_hB-pX0O42S1z9A-5S3VbLg_jFSpSuT8;
 
 if (supabaseUrl && supabaseKey) {
   supabase = createClient(supabaseUrl, supabaseKey);
