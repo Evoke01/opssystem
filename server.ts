@@ -1,5 +1,4 @@
 import express from 'express';
-import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import multer from 'multer';
 import { parse } from 'csv-parse';
@@ -7,11 +6,7 @@ import { createClient } from '@supabase/supabase-js';
 import { Resend } from 'resend';
 import cron from 'node-cron';
 import fs from 'fs';
-import { fileURLToPath } from 'url';
 import xlsx from 'xlsx';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = 3000;
@@ -318,20 +313,23 @@ async function generateAndSendReport() {
 }
 
 // Schedule daily report at 18:00 (6 PM)
-cron.schedule('0 18 * * *', async () => {
-  console.log('Running daily report cron job');
-  try {
-    await generateAndSendReport();
-  } catch (error) {
-    console.error('Cron job failed:', error);
-  }
-});
+if (!process.env.VERCEL) {
+  cron.schedule('0 18 * * *', async () => {
+    console.log('Running daily report cron job');
+    try {
+      await generateAndSendReport();
+    } catch (error) {
+      console.error('Cron job failed:', error);
+    }
+  });
+}
 
 async function startServer() {
   await setupDb();
 
   // Vite middleware for development
   if (process.env.NODE_ENV !== 'production' && !process.env.VERCEL) {
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
