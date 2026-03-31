@@ -1,0 +1,5 @@
+{
+  "name": "Daily Ops Reporting System",
+  "description": "A web app for ops teams where agents submit daily data and team leads receive automated reports.",
+  "requestFramePermissions": []
+}
