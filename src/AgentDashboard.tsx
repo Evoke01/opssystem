@@ -1,62 +1,124 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Upload, FileUp, CheckCircle2, AlertCircle, Loader2, LogOut, ClipboardList, BarChart2 } from 'lucide-react';
+import { Upload, FileUp, CheckCircle2, AlertCircle, Loader2, LogOut, ClipboardList, BarChart2, ChevronDown, ChevronRight, Hash } from 'lucide-react';
 
-function ReportsTable({ reports }: { reports: any[] }) {
-  if (reports.length === 0) return (
-    <div className="bg-white rounded-xl border border-gray-200 p-10 text-center text-gray-400 text-sm">
-      No reports found for this period
+function CodesPanel({ reportId }: { reportId: number }) {
+  const [codes, setCodes] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetch(`/api/report-codes?report_id=${reportId}`)
+      .then(r => r.json())
+      .then(d => { setCodes(Array.isArray(d) ? d : []); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, [reportId]);
+
+  if (loading) return <div className="px-4 py-3 text-xs text-gray-400">Loading codes...</div>;
+  if (codes.length === 0) return <div className="px-4 py-3 text-xs text-gray-400 italic">No access codes stored for this report</div>;
+
+  return (
+    <div className="px-4 py-3 bg-gray-50 border-t border-gray-100">
+      <p className="text-xs font-semibold text-gray-500 mb-2 uppercase tracking-wide">Access Codes ({codes.length})</p>
+      <div className="flex flex-wrap gap-1.5">
+        {codes.map(c => (
+          <span key={c.id} className="inline-flex items-center gap-1 bg-white border border-gray-200 text-gray-700 text-xs font-mono px-2 py-1 rounded-md">
+            <Hash className="w-2.5 h-2.5 text-gray-400" />{c.code}
+          </span>
+        ))}
+      </div>
     </div>
   );
+}
+
+function ReportsTable({ reports }: { reports: any[] }) {
+  const [expanded, setExpanded] = useState<number | null>(null);
+
+  if (reports.length === 0) return (
+    <div className="bg-white rounded-xl border border-gray-200 p-10 text-center text-gray-400 text-sm">No reports found for this period</div>
+  );
+
   const totals = reports.reduce((a, r) => ({
     s: a.s + r.total_sessions, ir: a.ir + r.id_retake, ti: a.ti + r.tech_issue, si: a.si + r.system_issue
   }), { s: 0, ir: 0, ti: 0, si: 0 });
   const totalRq = totals.ir + totals.ti + totals.si;
+  const sessionAvg = reports.length > 0 ? (totals.s / reports.length) : 0;
 
   return (
-    <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead className="bg-gray-50 border-b border-gray-200">
-            <tr>
-              {['Date', 'Sessions', 'ID Retake', 'Tech Transfer', 'System Issue', 'Requeue %'].map(h => (
-                <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">{h}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-100">
-            {reports.map((r: any) => {
-              const rq = r.id_retake + r.tech_issue + r.system_issue;
-              const pct = r.total_sessions > 0 ? (rq / r.total_sessions * 100) : 0;
-              return (
-                <tr key={r.id} className="hover:bg-gray-50">
-                  <td className="px-4 py-3 font-medium text-gray-900">{r.date}</td>
-                  <td className="px-4 py-3 text-gray-700">{r.total_sessions}</td>
-                  <td className="px-4 py-3 text-gray-700">{r.id_retake}</td>
-                  <td className="px-4 py-3 text-gray-700">{r.tech_issue}</td>
-                  <td className="px-4 py-3 text-gray-700">{r.system_issue}</td>
-                  <td className="px-4 py-3">
-                    <span className={`font-semibold ${pct > 10 ? 'text-red-600' : 'text-emerald-600'}`}>{pct.toFixed(1)}%</span>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-          <tfoot className="bg-blue-50 border-t-2 border-blue-100">
-            <tr>
-              <td className="px-4 py-3 font-bold text-gray-900">Total ({reports.length} days)</td>
-              <td className="px-4 py-3 font-bold">{totals.s}</td>
-              <td className="px-4 py-3 font-bold">{totals.ir}</td>
-              <td className="px-4 py-3 font-bold">{totals.ti}</td>
-              <td className="px-4 py-3 font-bold">{totals.si}</td>
-              <td className="px-4 py-3 font-bold">
-                <span className={totals.s > 0 && (totalRq / totals.s * 100) > 10 ? 'text-red-600' : 'text-emerald-600'}>
-                  {totals.s > 0 ? (totalRq / totals.s * 100).toFixed(1) : '0.0'}%
-                </span>
-              </td>
-            </tr>
-          </tfoot>
-        </table>
+    <div className="space-y-2">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        {[
+          { label: 'Total Sessions', value: totals.s },
+          { label: 'Session Avg / Day', value: sessionAvg.toFixed(1) },
+          { label: 'Total Requeues', value: totalRq },
+          { label: 'Requeue Rate', value: `${totals.s > 0 ? (totalRq / totals.s * 100).toFixed(1) : '0.0'}%` },
+        ].map(c => (
+          <div key={c.label} className="bg-white rounded-lg border border-gray-200 p-3">
+            <p className="text-xs text-gray-500">{c.label}</p>
+            <p className="text-lg font-bold text-gray-900 mt-0.5">{c.value}</p>
+          </div>
+        ))}
+      </div>
+
+      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-gray-50 border-b border-gray-200">
+              <tr>
+                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase w-8"></th>
+                {['Date', 'Sessions', 'ID Retake', 'Tech Transfer', 'System Issue', 'Requeue %'].map(h => (
+                  <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {reports.map((r: any) => {
+                const rq = r.id_retake + r.tech_issue + r.system_issue;
+                const pct = r.total_sessions > 0 ? (rq / r.total_sessions * 100) : 0;
+                const isOpen = expanded === r.id;
+                return (
+                  <React.Fragment key={r.id}>
+                    <tr className={`border-b border-gray-100 hover:bg-gray-50 cursor-pointer ${isOpen ? 'bg-blue-50' : ''}`}
+                      onClick={() => setExpanded(isOpen ? null : r.id)}>
+                      <td className="px-3 py-3 text-gray-400">
+                        {isOpen ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+                      </td>
+                      <td className="px-4 py-3 font-medium text-gray-900">{r.date}</td>
+                      <td className="px-4 py-3 text-gray-700">{r.total_sessions}</td>
+                      <td className="px-4 py-3 text-gray-700">{r.id_retake}</td>
+                      <td className="px-4 py-3 text-gray-700">{r.tech_issue}</td>
+                      <td className="px-4 py-3 text-gray-700">{r.system_issue}</td>
+                      <td className="px-4 py-3">
+                        <span className={`font-semibold ${pct > 10 ? 'text-red-600' : 'text-emerald-600'}`}>{pct.toFixed(1)}%</span>
+                      </td>
+                    </tr>
+                    {isOpen && (
+                      <tr className="border-b border-gray-100">
+                        <td colSpan={7} className="p-0">
+                          <CodesPanel reportId={r.id} />
+                        </td>
+                      </tr>
+                    )}
+                  </React.Fragment>
+                );
+              })}
+            </tbody>
+            <tfoot className="bg-blue-50 border-t-2 border-blue-100">
+              <tr>
+                <td className="px-3 py-3"></td>
+                <td className="px-4 py-3 font-bold text-gray-900">Total ({reports.length} days)</td>
+                <td className="px-4 py-3 font-bold">{totals.s}</td>
+                <td className="px-4 py-3 font-bold">{totals.ir}</td>
+                <td className="px-4 py-3 font-bold">{totals.ti}</td>
+                <td className="px-4 py-3 font-bold">{totals.si}</td>
+                <td className="px-4 py-3 font-bold">
+                  <span className={totals.s > 0 && (totalRq / totals.s * 100) > 10 ? 'text-red-600' : 'text-emerald-600'}>
+                    {totals.s > 0 ? (totalRq / totals.s * 100).toFixed(1) : '0.0'}%
+                  </span>
+                </td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
       </div>
     </div>
   );
@@ -68,7 +130,10 @@ export default function AgentDashboard() {
   const [tab, setTab] = useState<'submit' | 'monthly'>('submit');
 
   // Submit state
+  const [inputMode, setInputMode] = useState<'file' | 'paste'>('file');
   const [file, setFile] = useState<File | null>(null);
+  const [pastedCodes, setPastedCodes] = useState('');
+  const [codes, setCodes] = useState<string[]>([]);
   const [totalSessions, setTotalSessions] = useState<number | null>(null);
   const [idRetake, setIdRetake] = useState(0);
   const [techIssue, setTechIssue] = useState(0);
@@ -103,6 +168,14 @@ export default function AgentDashboard() {
     setLoadingReports(false);
   };
 
+  const handlePasteCodes = (text: string) => {
+    setPastedCodes(text);
+    const parsed = text.split(/[\n,]+/).map(s => s.trim()).filter(Boolean);
+    setCodes(parsed);
+    setTotalSessions(parsed.length > 0 ? parsed.length : null);
+    setError(null);
+  };
+
   const handleUpload = async () => {
     if (!file) return;
     setIsUploading(true); setError(null);
@@ -113,8 +186,13 @@ export default function AgentDashboard() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
       setTotalSessions(data.total_sessions);
+      setCodes(data.codes || []);
     } catch (e: any) { setError(e.message); }
     setIsUploading(false);
+  };
+
+  const resetInput = () => {
+    setFile(null); setTotalSessions(null); setCodes([]); setPastedCodes(''); setError(null);
   };
 
   const handleSubmit = async () => {
@@ -126,12 +204,18 @@ export default function AgentDashboard() {
       const res = await fetch('/api/submit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user_id: user.name, date: new Date().toISOString().split('T')[0], total_sessions: totalSessions, id_retake: idRetake, tech_issue: techIssue, system_issue: systemIssue }),
+        body: JSON.stringify({
+          user_id: user.name,
+          date: new Date().toISOString().split('T')[0],
+          total_sessions: totalSessions,
+          id_retake: idRetake, tech_issue: techIssue, system_issue: systemIssue,
+          codes,
+        }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
       setSuccess(true);
-      setFile(null); setTotalSessions(null); setIdRetake(0); setTechIssue(0); setSystemIssue(0);
+      resetInput(); setIdRetake(0); setTechIssue(0); setSystemIssue(0); setInputMode('file');
       setTimeout(() => setSuccess(false), 5000);
     } catch (e: any) { setError(e.message); }
     setIsSubmitting(false);
@@ -183,30 +267,62 @@ export default function AgentDashboard() {
             {error && <div className="flex items-center gap-2 bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700"><AlertCircle className="w-4 h-4 flex-shrink-0" />{error}</div>}
             {success && <div className="flex items-center gap-2 bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-sm text-emerald-700"><CheckCircle2 className="w-4 h-4 flex-shrink-0" />Report submitted successfully!</div>}
 
+            {/* Step 1: Session Input */}
             <div>
-              <h3 className="font-semibold text-gray-900 mb-3">1. Upload Session File</h3>
-              <label className="flex flex-col items-center justify-center w-full h-28 border-2 border-dashed border-gray-300 rounded-xl cursor-pointer hover:bg-gray-50 hover:border-blue-400 transition-colors">
-                <FileUp className="w-7 h-7 text-gray-400 mb-2" />
-                <p className="text-sm text-gray-500"><span className="font-medium text-blue-600">Click to upload</span> CSV or Excel</p>
-                <input type="file" className="hidden" accept=".csv,.xlsx,.xls"
-                  onChange={e => { if (e.target.files?.[0]) { setFile(e.target.files[0]); setTotalSessions(null); setError(null); } }} />
-              </label>
-              {file && (
-                <div className="mt-3 flex items-center justify-between bg-gray-50 p-3 rounded-lg border border-gray-200">
-                  <span className="text-sm text-gray-600 truncate max-w-[200px]">{file.name}</span>
-                  <button onClick={handleUpload} disabled={isUploading || totalSessions !== null}
-                    className="px-3 py-1.5 bg-blue-600 text-white text-xs font-medium rounded-lg disabled:opacity-50 hover:bg-blue-700 transition-colors">
-                    {isUploading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : 'Process File'}
-                  </button>
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="font-semibold text-gray-900">1. Session Input</h3>
+                <div className="flex bg-gray-100 rounded-lg p-0.5 gap-0.5">
+                  {(['file', 'paste'] as const).map(m => (
+                    <button key={m} onClick={() => { setInputMode(m); resetInput(); }}
+                      className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${inputMode === m ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
+                      {m === 'file' ? '📁 Upload File' : '📋 Paste Codes'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {inputMode === 'file' ? (
+                <>
+                  <label className="flex flex-col items-center justify-center w-full h-28 border-2 border-dashed border-gray-300 rounded-xl cursor-pointer hover:bg-gray-50 hover:border-blue-400 transition-colors">
+                    <FileUp className="w-7 h-7 text-gray-400 mb-2" />
+                    <p className="text-sm text-gray-500"><span className="font-medium text-blue-600">Click to upload</span> CSV or Excel</p>
+                    <input type="file" className="hidden" accept=".csv,.xlsx,.xls"
+                      onChange={e => { if (e.target.files?.[0]) { setFile(e.target.files[0]); setTotalSessions(null); setCodes([]); setError(null); } }} />
+                  </label>
+                  {file && (
+                    <div className="mt-3 flex items-center justify-between bg-gray-50 p-3 rounded-lg border border-gray-200">
+                      <span className="text-sm text-gray-600 truncate max-w-[200px]">{file.name}</span>
+                      <button onClick={handleUpload} disabled={isUploading || totalSessions !== null}
+                        className="px-3 py-1.5 bg-blue-600 text-white text-xs font-medium rounded-lg disabled:opacity-50 hover:bg-blue-700 transition-colors">
+                        {isUploading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : 'Process File'}
+                      </button>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div>
+                  <textarea
+                    value={pastedCodes}
+                    onChange={e => handlePasteCodes(e.target.value)}
+                    placeholder={"Paste access codes here — one per line or comma separated:\nABC123\nDEF456\nGHI789..."}
+                    rows={8}
+                    className="w-full border border-gray-300 rounded-xl p-3 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none placeholder-gray-300"
+                  />
+                  {codes.length > 0 && (
+                    <p className="mt-1.5 text-xs text-gray-400 text-right">{codes.length} codes detected</p>
+                  )}
                 </div>
               )}
+
               {totalSessions !== null && (
                 <div className="mt-3 flex items-center gap-2 p-3 bg-emerald-50 border border-emerald-200 rounded-lg text-sm text-emerald-700 font-medium">
-                  <CheckCircle2 className="w-4 h-4" />{totalSessions} sessions found
+                  <CheckCircle2 className="w-4 h-4" />
+                  {totalSessions} sessions {codes.length > 0 ? `(${codes.length} codes stored)` : ''}
                 </div>
               )}
             </div>
 
+            {/* Step 2: Requeues */}
             <div>
               <h3 className="font-semibold text-gray-900 mb-3">2. Enter Requeue Counts</h3>
               <div className="grid grid-cols-3 gap-4">
