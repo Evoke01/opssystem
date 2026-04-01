@@ -38,6 +38,12 @@ This starts the Express server on `http://localhost:3000` and serves the Vite ap
 2. Output directory: `dist`
 3. Set the Cloudflare Pages environment variable:
    `VITE_API_BASE_URL=https://api.ops.example.com`
+4. Authenticate Wrangler locally:
+   `npm run cf:login`
+5. Create the Pages project once:
+   `npm run cf:pages:create`
+6. Deploy from this repo:
+   `npm run cf:deploy`
 
 The repo includes `public/_redirects` for SPA route fallback and `public/_headers` for long-lived caching of hashed assets under `/assets`.
 

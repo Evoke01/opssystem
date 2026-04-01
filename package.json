@@ -8,6 +8,10 @@
     "start": "tsx server.ts",
     "build": "vite build",
     "preview": "vite preview",
+    "cf:whoami": "npx wrangler whoami",
+    "cf:login": "npx wrangler login",
+    "cf:pages:create": "npx wrangler pages project create opssystem --production-branch main",
+    "cf:deploy": "npm run build && npx wrangler pages deploy dist --project-name opssystem",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit"
   },
