@@ -8,7 +8,7 @@ import path from 'path';
 import xlsx from 'xlsx';
 
 const app = express();
-const allowedOrigins = (process.env.FRONTEND_ORIGIN || 'http://localhost:3000,http://localhost:4173,http://localhost:5173')
+const allowedOrigins = (process.env.FRONTEND_ORIGIN || 'http://localhost:3000,http://localhost:4173,http://localhost:5173,https://opssystem.pages.dev')
   .split(',')
   .map(origin => origin.trim().replace(/\/$/, ''))
   .filter(Boolean);
