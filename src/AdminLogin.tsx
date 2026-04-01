@@ -30,38 +30,50 @@ export default function AdminLogin() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 flex items-center justify-center px-4">
-      <div className="max-w-sm w-full bg-white rounded-2xl shadow-lg border border-gray-100 p-8">
-        <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-12 h-12 bg-slate-800 rounded-xl mb-4">
-            <ShieldCheck className="w-6 h-6 text-white" />
+    <div className="min-h-screen bg-zinc-950 flex items-center justify-center px-4">
+      {/* Subtle grid bg */}
+      <div className="absolute inset-0 pointer-events-none" style={{
+        backgroundImage: 'radial-gradient(circle at 1px 1px, rgba(255,255,255,0.03) 1px, transparent 0)',
+        backgroundSize: '32px 32px',
+      }} />
+
+      <div className="relative w-full max-w-[360px]">
+        {/* Icon */}
+        <div className="flex justify-center mb-8">
+          <div className="w-14 h-14 bg-zinc-900 border border-zinc-700 rounded-2xl flex items-center justify-center">
+            <ShieldCheck className="w-6 h-6 text-zinc-300" />
           </div>
-          <h1 className="text-2xl font-bold text-gray-900">TL Access</h1>
-          <p className="text-sm text-gray-500 mt-1">Team Lead dashboard login</p>
         </div>
 
-        {error && (
-          <div className="flex items-center gap-2 bg-red-50 border border-red-200 rounded-lg p-3 mb-4 text-sm text-red-700">
-            <AlertCircle className="w-4 h-4 flex-shrink-0" />{error}
-          </div>
-        )}
+        <div className="text-center mb-8">
+          <h1 className="text-xl font-bold text-white">Team Lead Access</h1>
+          <p className="text-sm text-zinc-500 mt-1">Enter your admin password to continue</p>
+        </div>
 
-        <div className="space-y-4">
+        <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 space-y-4">
+          {error && (
+            <div className="flex items-center gap-2 bg-red-500/10 border border-red-500/20 rounded-lg p-3 text-sm text-red-400">
+              <AlertCircle className="w-4 h-4 shrink-0" />{error}
+            </div>
+          )}
+
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Admin Password</label>
+            <label className="block text-xs font-medium text-zinc-400 mb-1.5">Admin Password</label>
             <input type="password" value={password} onChange={e => setPassword(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && handleLogin()}
               placeholder="Enter admin password"
-              className="w-full border border-gray-300 rounded-lg py-2.5 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-slate-500 focus:border-transparent" />
+              autoFocus
+              className="w-full bg-zinc-800 border border-zinc-700 rounded-xl py-2.5 px-3.5 text-sm text-white placeholder-zinc-600 focus:outline-none focus:border-zinc-500 focus:ring-2 focus:ring-zinc-500/20" />
           </div>
+
           <button onClick={handleLogin} disabled={loading || !password}
-            className="w-full flex items-center justify-center gap-2 py-2.5 bg-slate-800 text-white rounded-lg text-sm font-semibold hover:bg-slate-900 disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
-            {loading ? <><Loader2 className="w-4 h-4 animate-spin" />Signing in...</> : 'Sign In'}
+            className="w-full flex items-center justify-center gap-2 py-2.5 bg-zinc-100 hover:bg-white disabled:bg-zinc-800 disabled:text-zinc-600 disabled:cursor-not-allowed text-zinc-900 rounded-xl text-sm font-semibold transition-all">
+            {loading ? <><Loader2 className="w-4 h-4 animate-spin text-zinc-600" />Signing in…</> : 'Sign In'}
           </button>
         </div>
 
-        <div className="mt-6 pt-6 border-t border-gray-100 text-center">
-          <button onClick={() => navigate('/')} className="text-xs text-gray-400 hover:text-gray-600 transition-colors">
+        <div className="mt-5 text-center">
+          <button onClick={() => navigate('/')} className="text-xs text-zinc-600 hover:text-zinc-400 transition-colors">
             ← Back to Agent Login
           </button>
         </div>
