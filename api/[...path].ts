@@ -1129,8 +1129,6 @@ app.patch('/api/admin/users/:id', async (req: any, res: any) => {
   return res.json({ success: true, user: defaultUser(data) });
 });
 
-});
-
 app.all('/api/report', async (req: any, res: any) => {
   try {
     if (!supabase) {
