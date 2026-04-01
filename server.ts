@@ -1,32 +1,11 @@
 import express from 'express';
 import path from 'path';
-import cron from 'node-cron';
 
 import app from './api/[...path]';
 
 const PORT = Number(process.env.PORT || 3000);
 const isVercel = Boolean(process.env.VERCEL);
 const isProduction = process.env.NODE_ENV === 'production';
-
-async function triggerDailyReport() {
-  const response = await fetch(`http://127.0.0.1:${PORT}/api/cron/reminders`, {
-    method: 'GET',
-  });
-
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`Report trigger failed: ${response.status} ${body}`);
-  }
-}
-
-if (!isVercel) {
-  cron.schedule('*/15 * * * *', () => {
-    console.log('Running reminder cron job');
-    void triggerDailyReport().catch((error) => {
-      console.error('Cron job failed:', error);
-    });
-  });
-}
 
 async function startServer() {
   if (!isProduction && !isVercel) {
@@ -43,7 +22,6 @@ async function startServer() {
       if (req.path.startsWith('/api/')) {
         return next();
       }
-
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }

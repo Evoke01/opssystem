@@ -8,7 +8,6 @@ import path from 'path';
 import xlsx from 'xlsx';
 
 import {
-  addDays,
   buildSummary,
   countWorkingDays,
   isValidDateString,
@@ -21,9 +20,7 @@ import {
   safeTime,
   safeTimeZone,
   ScheduleUser,
-  summarizeReports,
-  timeToMinutes,
-  zonedNowInfo,
+  summarizeReports
 } from './reporting';
 
 const app = express();
@@ -39,7 +36,6 @@ const supabase = process.env.SUPABASE_URL && process.env.SUPABASE_ANON_KEY
   : null;
 
 const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
-const reminderGraceMinutes = Number(process.env.REMINDER_GRACE_MINUTES || 30);
 
 app.use((req: any, res: any, next: any) => {
   const origin = typeof req.headers.origin === 'string'
@@ -285,32 +281,6 @@ async function buildDayReport(userId: number, date: string) {
     report: serializeReport(report),
     codes_count: codes.length,
   };
-}
-
-async function sendReminder(user: ScheduleUser, localDate: string) {
-  if (!user.email) {
-    console.log(`Missing email for ${user.name}. Reminder not sent for ${localDate}.`);
-    return false;
-  }
-
-  if (!resend) {
-    console.log(`Resend not configured. Reminder for ${user.name} on ${localDate}.`);
-    return false;
-  }
-
-  try {
-    await resend.emails.send({
-      from: 'Ops System <onboarding@resend.dev>',
-      to: user.email,
-      subject: `Missing Daily Ops report for ${localDate}`,
-      html: `<p>Hello ${user.name},</p><p>Your Daily Ops report for <b>${localDate}</b> has not been submitted yet. Please upload your remaining access codes and batch requeue counts.</p>`,
-    });
-
-    return true;
-  } catch (error) {
-    console.error(`Failed to send reminder to ${user.email}:`, error);
-    return false;
-  }
 }
 
 async function buildDailySummaryForDate(date: string) {
@@ -570,7 +540,7 @@ app.post('/api/submit', async (req: any, res: any) => {
     return jsonError(res, 404, 'User not found');
   }
 
-  const localToday = zonedNowInfo(new Date(), user.timezone ?? 'Asia/Kolkata').dateKey;
+  const localToday =(new Date(), user.timezone ?? 'Asia/Kolkata').dateKey;
   if (date > localToday) {
     return jsonError(res, 400, 'Future dates are not allowed');
   }
@@ -910,102 +880,6 @@ app.patch('/api/admin/users/:id', async (req: any, res: any) => {
   return res.json({ success: true, user: defaultUser(data) });
 });
 
-app.get('/api/cron/reminders', async (_req: any, res: any) => {
-  if (!supabase) {
-    console.error('Database not configured. Reminder cron skipped.');
-    return jsonError(res, 500, 'Database not configured');
-  }
-
-  const users = await fetchAgentUsers();
-  const now = new Date();
-  const utcDate = now.toISOString().slice(0, 10);
-  const windowStart = addDays(utcDate, -1);
-  const windowEnd = addDays(utcDate, 2);
-
-  const [reportsResponse, leavesResponse, remindersResponse] = await Promise.all([
-    supabase.from('daily_reports').select('user_id, date').gte('date', windowStart).lt('date', windowEnd),
-    supabase.from('leave_dates').select('user_id, date').gte('date', windowStart).lt('date', windowEnd),
-    supabase.from('report_reminders').select('user_id, reminder_date, kind').gte('reminder_date', windowStart).lt('reminder_date', windowEnd),
-  ]);
-
-  const reportKeys = new Set<string>((reportsResponse.data || []).map((report: any) => `${Number(report.user_id)}:${report.date}`));
-  const leaveKeys = new Set<string>((leavesResponse.data || []).map((leave: any) => `${Number(leave.user_id)}:${leave.date}`));
-  const reminderKeys = new Set<string>((remindersResponse.data || []).map((entry: any) => `${Number(entry.user_id)}:${entry.reminder_date}:${entry.kind}`));
-
-  let sent = 0;
-  let skipped = 0;
-  const details: Array<{ user_id: number; user_name: string; status: string; date: string }> = [];
-
-  for (const user of users) {
-    const localNow = zonedNowInfo(now, user.timezone ?? 'Asia/Kolkata');
-    const shiftEndMinutes = timeToMinutes(user.shift_end ?? '18:00');
-    const leaveDates = new Set<string>();
-    if (leaveKeys.has(`${user.id}:${localNow.dateKey}`)) {
-      leaveDates.add(localNow.dateKey);
-    }
-
-    if (localNow.minutes < shiftEndMinutes) {
-      skipped += 1;
-      details.push({ user_id: user.id, user_name: user.name, status: 'before_shift_end', date: localNow.dateKey });
-      continue;
-    }
-
-    if (localNow.minutes >= (shiftEndMinutes + reminderGraceMinutes)) {
-      skipped += 1;
-      details.push({ user_id: user.id, user_name: user.name, status: 'outside_window', date: localNow.dateKey });
-      continue;
-    }
-
-    if (!isWorkingDay(localNow.dateKey, user, leaveDates)) {
-      skipped += 1;
-      details.push({ user_id: user.id, user_name: user.name, status: leaveDates.has(localNow.dateKey) ? 'leave' : 'week_off', date: localNow.dateKey });
-      continue;
-    }
-
-    if (reportKeys.has(`${user.id}:${localNow.dateKey}`)) {
-      skipped += 1;
-      details.push({ user_id: user.id, user_name: user.name, status: 'already_submitted', date: localNow.dateKey });
-      continue;
-    }
-
-    if (reminderKeys.has(`${user.id}:${localNow.dateKey}:missing_report`)) {
-      skipped += 1;
-      details.push({ user_id: user.id, user_name: user.name, status: 'already_reminded', date: localNow.dateKey });
-      continue;
-    }
-
-    const delivered = await sendReminder(user, localNow.dateKey);
-    if (!delivered) {
-      skipped += 1;
-      details.push({ user_id: user.id, user_name: user.name, status: 'delivery_skipped', date: localNow.dateKey });
-      continue;
-    }
-
-    const { error } = await supabase.from('report_reminders').insert([{
-      user_id: user.id,
-      reminder_date: localNow.dateKey,
-      kind: 'missing_report',
-    }]);
-
-    if (error) {
-      console.error(`Reminder log insert failed for ${user.name}:`, error);
-      skipped += 1;
-      details.push({ user_id: user.id, user_name: user.name, status: 'log_failed', date: localNow.dateKey });
-      continue;
-    }
-
-    sent += 1;
-    details.push({ user_id: user.id, user_name: user.name, status: 'sent', date: localNow.dateKey });
-  }
-
-  return res.json({
-    success: true,
-    evaluated: users.length,
-    sent,
-    skipped,
-    grace_minutes: reminderGraceMinutes,
-    details,
-  });
 });
 
 app.all('/api/report', async (req: any, res: any) => {
