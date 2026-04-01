@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AlertCircle, Loader2, ShieldCheck } from 'lucide-react';
+import { apiFetch } from './api-client';
 
 export default function AdminLogin() {
   const navigate = useNavigate();
@@ -16,7 +17,7 @@ export default function AdminLogin() {
     if (!password) return;
     setLoading(true); setError('');
     try {
-      const res = await fetch('/api/admin/login', {
+      const res = await apiFetch('/api/admin/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ password }),

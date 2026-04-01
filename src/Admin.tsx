@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AlertCircle, LogOut, Users, Calendar, BarChart2, ChevronDown, ChevronRight, Hash } from 'lucide-react';
+import { apiFetch } from './api-client';
 
 function StatCard({ label, value, sub }: { label: string; value: any; sub?: string }) {
   return (
@@ -17,7 +18,7 @@ function CodesPanel({ reportId }: { reportId: number }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch(`/api/report-codes?report_id=${reportId}`)
+    apiFetch(`/api/report-codes?report_id=${reportId}`)
       .then(r => r.json())
       .then(d => { setCodes(Array.isArray(d) ? d : []); setLoading(false); })
       .catch(() => setLoading(false));
@@ -58,7 +59,7 @@ function DailySummary() {
   const fetchSummary = async () => {
     setLoading(true); setError(null);
     try {
-      const res = await fetch(`/api/admin/summary?date=${date}`);
+      const res = await apiFetch(`/api/admin/summary?date=${date}`);
       const result = await res.json();
       if (!res.ok) throw new Error(result.error);
       setData(result);
@@ -135,7 +136,7 @@ function MonthlyTeam() {
   const fetchMonthly = async () => {
     setLoading(true); setError(null);
     try {
-      const res = await fetch(`/api/admin/monthly?month=${month}`);
+      const res = await apiFetch(`/api/admin/monthly?month=${month}`);
       const result = await res.json();
       if (!res.ok) throw new Error(result.error);
       setData(result);
@@ -219,7 +220,7 @@ function AgentReports() {
   const [expanded, setExpanded] = useState<number | null>(null);
 
   useEffect(() => {
-    fetch('/api/admin/agents').then(r => r.json()).then(d => setAgents(Array.isArray(d) ? d : [])).catch(() => {});
+    apiFetch('/api/admin/agents').then(r => r.json()).then(d => setAgents(Array.isArray(d) ? d : [])).catch(() => {});
   }, []);
 
   const fetchReports = async () => {
@@ -228,7 +229,7 @@ function AgentReports() {
     const params = new URLSearchParams({ user_name: selectedAgent });
     if (month) params.append('month', month);
     try {
-      const res = await fetch(`/api/admin/user-reports?${params}`);
+      const res = await apiFetch(`/api/admin/user-reports?${params}`);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
       setReports(Array.isArray(data) ? data : []);

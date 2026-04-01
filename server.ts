@@ -9,8 +9,32 @@ import fs from 'fs';
 import xlsx from 'xlsx';
 
 const app = express();
-const PORT = 3000;
+const PORT = Number(process.env.PORT || 3000);
+const allowedOrigins = (process.env.FRONTEND_ORIGIN || 'http://localhost:3000,http://localhost:4173,http://localhost:5173')
+  .split(',')
+  .map(origin => origin.trim().replace(/\/$/, ''))
+  .filter(Boolean);
 
+app.use((req, res, next) => {
+  const origin = typeof req.headers.origin === 'string'
+    ? req.headers.origin.replace(/\/$/, '')
+    : '';
+
+  if (origin && (allowedOrigins.includes('*') || allowedOrigins.includes(origin))) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Vary', 'Origin');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+  }
+
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+
+  if (req.method === 'OPTIONS') {
+    return res.status(204).end();
+  }
+
+  next();
+});
 app.use(express.json());
 
 const upload = multer({ dest: '/tmp' });
@@ -31,6 +55,10 @@ async function setupDb() {
 }
 
 // API Routes
+
+app.get('/api/health', (_req, res) => {
+  res.json({ status: 'ok', environment: process.env.NODE_ENV || 'development' });
+});
 
 app.post('/api/upload', upload.single('file'), (req, res) => {
   if (!req.file) {
@@ -294,7 +322,7 @@ async function generateAndSendReport() {
   if (!resendApiKey || !teamLeadEmail) {
     console.log('Email not sent. Missing RESEND_API_KEY or TEAM_LEAD_EMAIL.');
     console.log('Report Content:', htmlContent);
-    throw new Error('Missing RESEND_API_KEY or TEAM_LEAD_EMAIL environment variables. Please configure them in the AI Studio Settings.');
+    throw new Error('Missing RESEND_API_KEY or TEAM_LEAD_EMAIL environment variables. Please configure them on the backend host.');
   }
 
   const resend = new Resend(resendApiKey);

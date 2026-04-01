@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Upload, FileUp, CheckCircle2, AlertCircle, Loader2, Mail } from 'lucide-react';
+import { apiFetch } from './api-client';
 
 export default function App() {
   const [file, setFile] = useState<File | null>(null);
@@ -36,7 +37,7 @@ export default function App() {
     formData.append('file', file);
 
     try {
-      const response = await fetch('/api/upload', {
+      const response = await apiFetch('/api/upload', {
         method: 'POST',
         body: formData,
       });
@@ -80,7 +81,7 @@ export default function App() {
     try {
       const today = new Date().toISOString().split('T')[0];
       
-      const response = await fetch('/api/submit', {
+      const response = await apiFetch('/api/submit', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -125,7 +126,7 @@ export default function App() {
     setEmailSuccess(false);
 
     try {
-      const response = await fetch('/api/report', {
+      const response = await apiFetch('/api/report', {
         method: 'POST',
       });
 

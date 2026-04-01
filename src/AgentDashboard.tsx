@@ -1,13 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Upload, FileUp, CheckCircle2, AlertCircle, Loader2, LogOut, ClipboardList, BarChart2, ChevronDown, ChevronRight, Hash } from 'lucide-react';
+import { apiFetch } from './api-client';
 
 function CodesPanel({ reportId }: { reportId: number }) {
   const [codes, setCodes] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch(`/api/report-codes?report_id=${reportId}`)
+    apiFetch(`/api/report-codes?report_id=${reportId}`)
       .then(r => r.json())
       .then(d => { setCodes(Array.isArray(d) ? d : []); setLoading(false); })
       .catch(() => setLoading(false));
@@ -161,7 +162,7 @@ export default function AgentDashboard() {
   const fetchMonthly = async () => {
     setLoadingReports(true);
     try {
-      const res = await fetch(`/api/agent/reports?user_name=${encodeURIComponent(user.name)}&month=${month}`);
+      const res = await apiFetch(`/api/agent/reports?user_name=${encodeURIComponent(user.name)}&month=${month}`);
       const data = await res.json();
       setReports(Array.isArray(data) ? data : []);
     } catch { setReports([]); }
@@ -182,7 +183,7 @@ export default function AgentDashboard() {
     const formData = new FormData();
     formData.append('file', file);
     try {
-      const res = await fetch('/api/upload', { method: 'POST', body: formData });
+      const res = await apiFetch('/api/upload', { method: 'POST', body: formData });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
       setTotalSessions(data.total_sessions);
@@ -201,7 +202,7 @@ export default function AgentDashboard() {
     if (totalRequeue > totalSessions) { setError('Total requeues cannot exceed total sessions'); return; }
     setIsSubmitting(true); setError(null);
     try {
-      const res = await fetch('/api/submit', {
+      const res = await apiFetch('/api/submit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

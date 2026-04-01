@@ -40,7 +40,7 @@ ON CONFLICT (name) DO NOTHING;
 -- To add users, insert rows like:
 -- INSERT INTO users (name, team_id, password, role)
 -- VALUES ('John Doe', 1, 'pass123', 'agent');
--- TL password is set via ADMIN_PASSWORD env var in Vercel
+-- TL password is set via ADMIN_PASSWORD on your backend host
 
 -- Access codes (linked to each daily report)
 CREATE TABLE IF NOT EXISTS access_codes (

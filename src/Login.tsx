@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AlertCircle, Loader2 } from 'lucide-react';
+import { apiFetch } from './api-client';
 
 export default function Login() {
   const navigate = useNavigate();
@@ -14,12 +15,12 @@ export default function Login() {
 
   useEffect(() => {
     if (sessionStorage.getItem('ops_user')) navigate('/agent');
-    fetch('/api/teams').then(r => r.json()).then(d => setTeams(Array.isArray(d) ? d : [])).catch(() => {});
+    apiFetch('/api/teams').then(r => r.json()).then(d => setTeams(Array.isArray(d) ? d : [])).catch(() => {});
   }, []);
 
   useEffect(() => {
     if (!selectedTeam) { setMembers([]); setSelectedUser(''); return; }
-    fetch(`/api/teams/${selectedTeam}/members`)
+    apiFetch(`/api/teams/${selectedTeam}/members`)
       .then(r => r.json())
       .then(d => setMembers(Array.isArray(d) ? d : []))
       .catch(() => {});
@@ -30,7 +31,7 @@ export default function Login() {
     if (!selectedUser || !password) { setError('Please select your name and enter your password'); return; }
     setLoading(true); setError('');
     try {
-      const res = await fetch('/api/login', {
+      const res = await apiFetch('/api/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ user_id: parseInt(selectedUser), password }),

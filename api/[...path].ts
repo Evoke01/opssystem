@@ -8,6 +8,31 @@ import path from 'path';
 import xlsx from 'xlsx';
 
 const app = express();
+const allowedOrigins = (process.env.FRONTEND_ORIGIN || 'http://localhost:3000,http://localhost:4173,http://localhost:5173')
+  .split(',')
+  .map(origin => origin.trim().replace(/\/$/, ''))
+  .filter(Boolean);
+
+app.use((req: any, res: any, next: any) => {
+  const origin = typeof req.headers.origin === 'string'
+    ? req.headers.origin.replace(/\/$/, '')
+    : '';
+
+  if (origin && (allowedOrigins.includes('*') || allowedOrigins.includes(origin))) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Vary', 'Origin');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+  }
+
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+
+  if (req.method === 'OPTIONS') {
+    return res.status(204).end();
+  }
+
+  next();
+});
 app.use(express.json({ limit: '5mb' }));
 const upload = multer({ dest: '/tmp' });
 
@@ -21,6 +46,10 @@ function monthRange(month: string) {
   const end = m === 12 ? `${y + 1}-01-01` : `${y}-${String(m + 1).padStart(2, '0')}-01`;
   return { start, end };
 }
+
+app.get('/api/health', (_req: any, res: any) => {
+  res.json({ status: 'ok', environment: process.env.NODE_ENV || 'production' });
+});
 
 // ─── AUTH ─────────────────────────────────────────────────────────────────────
 
