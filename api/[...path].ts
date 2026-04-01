@@ -41,7 +41,6 @@ type ReportRow = {
   tech_issue: number;
   system_issue: number;
   created_at?: string | null;
-  updated_at?: string | null;
 };
 
 type LeaveRow = {
@@ -343,7 +342,6 @@ function serializeReport(report: any) {
     total_requeue: totals.totalRequeue,
     requeue_percent: totals.requeuePercent,
     created_at: report.created_at ?? null,
-    updated_at: report.updated_at ?? null,
   };
 }
 
@@ -359,7 +357,6 @@ function emptyReport(userId: number, date: string) {
     total_requeue: 0,
     requeue_percent: null,
     created_at: null,
-    updated_at: null,
   };
 }
 
@@ -822,7 +819,6 @@ app.post('/api/submit', async (req: any, res: any) => {
         id_retake: batchIdRetake,
         tech_issue: batchTechIssue,
         system_issue: batchSystemIssue,
-        updated_at: new Date().toISOString(),
       }])
       .select('*')
       .single();
@@ -840,7 +836,6 @@ app.post('/api/submit', async (req: any, res: any) => {
         id_retake: Number(report.id_retake ?? 0) + batchIdRetake,
         tech_issue: Number(report.tech_issue ?? 0) + batchTechIssue,
         system_issue: Number(report.system_issue ?? 0) + batchSystemIssue,
-        updated_at: new Date().toISOString(),
       })
       .eq('id', Number(report.id))
       .select('*')
