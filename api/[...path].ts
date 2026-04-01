@@ -7,11 +7,39 @@ import fs from 'fs';
 import path from 'path';
 import xlsx from 'xlsx';
 
+import {
+  addDays,
+  buildSummary,
+  countWorkingDays,
+  isValidDateString,
+  isValidMonthString,
+  isWorkingDay,
+  monthRange,
+  normalizeCodes,
+  normalizeWeekOffs,
+  reportTotals,
+  safeTime,
+  safeTimeZone,
+  ScheduleUser,
+  summarizeReports,
+  timeToMinutes,
+  zonedNowInfo,
+} from './reporting';
+
 const app = express();
+const upload = multer({ dest: '/tmp' });
+
 const allowedOrigins = (process.env.FRONTEND_ORIGIN || 'http://localhost:3000,http://localhost:4173,http://localhost:5173,https://opssystem.pages.dev')
   .split(',')
-  .map(origin => origin.trim().replace(/\/$/, ''))
+  .map((origin) => origin.trim().replace(/\/$/, ''))
   .filter(Boolean);
+
+const supabase = process.env.SUPABASE_URL && process.env.SUPABASE_ANON_KEY
+  ? createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY)
+  : null;
+
+const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
+const reminderGraceMinutes = Number(process.env.REMINDER_GRACE_MINUTES || 30);
 
 app.use((req: any, res: any, next: any) => {
   const origin = typeof req.headers.origin === 'string'
@@ -24,7 +52,7 @@ app.use((req: any, res: any, next: any) => {
     res.setHeader('Access-Control-Allow-Credentials', 'true');
   }
 
-  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PATCH,DELETE,OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
   if (req.method === 'OPTIONS') {
@@ -33,269 +61,1027 @@ app.use((req: any, res: any, next: any) => {
 
   next();
 });
+
 app.use(express.json({ limit: '5mb' }));
-const upload = multer({ dest: '/tmp' });
 
-const supabase = process.env.SUPABASE_URL && process.env.SUPABASE_ANON_KEY
-  ? createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY)
-  : null;
+function getQueryString(value: unknown) {
+  if (Array.isArray(value)) {
+    return String(value[0] ?? '').trim();
+  }
 
-function monthRange(month: string) {
-  const [y, m] = month.split('-').map(Number);
-  const start = `${month}-01`;
-  const end = m === 12 ? `${y + 1}-01-01` : `${y}-${String(m + 1).padStart(2, '0')}-01`;
-  return { start, end };
+  return String(value ?? '').trim();
+}
+
+function defaultUser(user: any): ScheduleUser {
+  return {
+    ...user,
+    id: Number(user.id),
+    email: user.email ?? null,
+    shift_start: safeTime(user.shift_start, '09:00'),
+    shift_end: safeTime(user.shift_end, '18:00'),
+    week_offs: normalizeWeekOffs(user.week_offs),
+    timezone: safeTimeZone(user.timezone),
+  };
+}
+
+function serializeReport(report: any) {
+  const totals = reportTotals(report);
+
+  return {
+    id: Number(report.id),
+    user_id: Number(report.user_id),
+    date: String(report.date),
+    total_sessions: totals.totalSessions,
+    id_retake: totals.idRetake,
+    tech_issue: totals.techIssue,
+    system_issue: totals.systemIssue,
+    total_requeue: totals.totalRequeue,
+    requeue_percent: totals.requeuePercent,
+    created_at: report.created_at ?? null,
+    updated_at: report.updated_at ?? null,
+  };
+}
+
+function emptyReport(userId: number, date: string) {
+  return {
+    id: null,
+    user_id: userId,
+    date,
+    total_sessions: 0,
+    id_retake: 0,
+    tech_issue: 0,
+    system_issue: 0,
+    total_requeue: 0,
+    requeue_percent: null,
+    created_at: null,
+    updated_at: null,
+  };
+}
+
+function jsonError(res: any, status: number, error: string) {
+  return res.status(status).json({ error });
+}
+
+async function fetchUserById(userId: number) {
+  if (!supabase) {
+    return null;
+  }
+
+  const { data, error } = await supabase.from('users').select('*').eq('id', userId).single();
+  if (error || !data) {
+    return null;
+  }
+
+  return defaultUser(data);
+}
+
+async function resolveUserFromQuery(req: any) {
+  const userIdValue = getQueryString(req.query.user_id);
+  if (userIdValue) {
+    return fetchUserById(Number(userIdValue));
+  }
+
+  const userName = getQueryString(req.query.user_name);
+  if (!userName || !supabase) {
+    return null;
+  }
+
+  const { data, error } = await supabase.from('users').select('*').eq('name', userName).single();
+  if (error || !data) {
+    return null;
+  }
+
+  return defaultUser(data);
+}
+
+async function fetchAgentUsers() {
+  if (!supabase) {
+    return [];
+  }
+
+  const { data, error } = await supabase.from('users').select('*').eq('role', 'agent').order('name');
+  if (error || !Array.isArray(data)) {
+    return [];
+  }
+
+  return data.map(defaultUser);
+}
+
+async function fetchReportByUserDate(userId: number, date: string) {
+  if (!supabase) {
+    return null;
+  }
+
+  const { data, error } = await supabase
+    .from('daily_reports')
+    .select('*')
+    .eq('user_id', userId)
+    .eq('date', date)
+    .maybeSingle();
+
+  if (error || !data) {
+    return null;
+  }
+
+  return data;
+}
+
+async function fetchCodesForReport(reportId: number) {
+  if (!supabase) {
+    return [];
+  }
+
+  const { data, error } = await supabase
+    .from('access_codes')
+    .select('id, code, created_at')
+    .eq('report_id', reportId)
+    .order('id');
+
+  if (error || !Array.isArray(data)) {
+    return [];
+  }
+
+  return data;
+}
+
+async function fetchLeavesByUserAndRange(userId: number, start: string, endExclusive: string) {
+  if (!supabase) {
+    return [];
+  }
+
+  const { data, error } = await supabase
+    .from('leave_dates')
+    .select('*')
+    .eq('user_id', userId)
+    .gte('date', start)
+    .lt('date', endExclusive)
+    .order('date');
+
+  if (error || !Array.isArray(data)) {
+    return [];
+  }
+
+  return data;
+}
+
+async function fetchReportsByUserAndRange(userId: number, start: string, endExclusive: string) {
+  if (!supabase) {
+    return [];
+  }
+
+  const { data, error } = await supabase
+    .from('daily_reports')
+    .select('*')
+    .eq('user_id', userId)
+    .gte('date', start)
+    .lt('date', endExclusive)
+    .order('date', { ascending: false });
+
+  if (error || !Array.isArray(data)) {
+    return [];
+  }
+
+  return data.map(serializeReport);
+}
+
+async function buildUserReportsPayload(user: ScheduleUser, month: string) {
+  const { start, end } = monthRange(month);
+  const [reports, leaves] = await Promise.all([
+    fetchReportsByUserAndRange(user.id, start, end),
+    fetchLeavesByUserAndRange(user.id, start, end),
+  ]);
+
+  const leaveDates = new Set(leaves.map((leave: any) => String(leave.date)));
+  const { workingDays, leaveDays } = countWorkingDays(start, end, user, leaveDates);
+  const totals = summarizeReports(reports as any);
+  const totalRequeue = totals.idRetake + totals.techIssue + totals.systemIssue;
+
+  return {
+    reports,
+    summary: buildSummary({
+      totalSessions: totals.totalSessions,
+      totalRequeue,
+      workingDays,
+      submittedDays: reports.length,
+      leaveDays,
+    }),
+    leaves,
+  };
+}
+
+async function buildDayReport(userId: number, date: string) {
+  const report = await fetchReportByUserDate(userId, date);
+  if (!report) {
+    return {
+      exists: false,
+      report: emptyReport(userId, date),
+      codes_count: 0,
+    };
+  }
+
+  const codes = await fetchCodesForReport(Number(report.id));
+  return {
+    exists: true,
+    report: serializeReport(report),
+    codes_count: codes.length,
+  };
+}
+
+async function sendReminder(user: ScheduleUser, localDate: string) {
+  if (!user.email) {
+    console.log(`Missing email for ${user.name}. Reminder not sent for ${localDate}.`);
+    return false;
+  }
+
+  if (!resend) {
+    console.log(`Resend not configured. Reminder for ${user.name} on ${localDate}.`);
+    return false;
+  }
+
+  try {
+    await resend.emails.send({
+      from: 'Ops System <onboarding@resend.dev>',
+      to: user.email,
+      subject: `Missing Daily Ops report for ${localDate}`,
+      html: `<p>Hello ${user.name},</p><p>Your Daily Ops report for <b>${localDate}</b> has not been submitted yet. Please upload your remaining access codes and batch requeue counts.</p>`,
+    });
+
+    return true;
+  } catch (error) {
+    console.error(`Failed to send reminder to ${user.email}:`, error);
+    return false;
+  }
+}
+
+async function buildDailySummaryForDate(date: string) {
+  const users = await fetchAgentUsers();
+  const reportResponse = await supabase!
+    .from('daily_reports')
+    .select('*')
+    .eq('date', date);
+  const leaveResponse = await supabase!
+    .from('leave_dates')
+    .select('*')
+    .eq('date', date);
+
+  const reports = Array.isArray(reportResponse.data) ? reportResponse.data : [];
+  const leaves = Array.isArray(leaveResponse.data) ? leaveResponse.data : [];
+  const reportMap = new Map<number, any>(reports.map((report: any) => [Number(report.user_id), report]));
+  const leaveMap = new Map<number, Set<string>>();
+
+  for (const leave of leaves) {
+    const userId = Number(leave.user_id);
+    const dates = leaveMap.get(userId) ?? new Set<string>();
+    dates.add(String(leave.date));
+    leaveMap.set(userId, dates);
+  }
+
+  let totalSessions = 0;
+  let totalIdRetake = 0;
+  let totalTechIssue = 0;
+  let totalSystemIssue = 0;
+  let workingAgentCount = 0;
+  let submittedAgentCount = 0;
+
+  const agents = users.map((user) => {
+    const leaveDates = leaveMap.get(user.id) ?? new Set<string>();
+    const workingDay = isWorkingDay(date, user, leaveDates);
+    const report = reportMap.get(user.id);
+    const totals = reportTotals(report);
+    const submitted = Boolean(report);
+
+    if (workingDay) {
+      workingAgentCount += 1;
+    }
+
+    if (submitted) {
+      submittedAgentCount += 1;
+      totalSessions += totals.totalSessions;
+      totalIdRetake += totals.idRetake;
+      totalTechIssue += totals.techIssue;
+      totalSystemIssue += totals.systemIssue;
+    }
+
+    return {
+      user_id: user.id,
+      user_name: user.name,
+      email: user.email ?? null,
+      submitted,
+      working_day: workingDay ? 1 : 0,
+      on_leave: leaveDates.has(date),
+      is_week_off: !workingDay && !leaveDates.has(date),
+      status: !workingDay ? (leaveDates.has(date) ? 'Leave' : 'Week Off') : (submitted ? 'Submitted' : 'Pending'),
+      total_sessions: totals.totalSessions,
+      id_retake: totals.idRetake,
+      tech_issue: totals.techIssue,
+      system_issue: totals.systemIssue,
+      total_requeue: totals.totalRequeue,
+      requeue_percent: totals.requeuePercent,
+      session_avg: workingDay ? totals.totalSessions : null,
+      report_id: report?.id ?? null,
+    };
+  });
+
+  const totalRequeue = totalIdRetake + totalTechIssue + totalSystemIssue;
+  const issues = [
+    { name: 'ID Retake', count: totalIdRetake },
+    { name: 'Tech Issue', count: totalTechIssue },
+    { name: 'System Issue', count: totalSystemIssue },
+  ].sort((left, right) => right.count - left.count);
+
+  return {
+    date,
+    totals: {
+      total_sessions: totalSessions,
+      total_requeue: totalRequeue,
+      requeue_percent: totalSessions > 0 ? (totalRequeue / totalSessions) * 100 : null,
+      top_issue: issues[0]?.count ? issues[0].name : 'None',
+      session_avg: workingAgentCount > 0 ? totalSessions / workingAgentCount : null,
+      agent_count: users.length,
+      working_agent_count: workingAgentCount,
+      submitted_agent_count: submittedAgentCount,
+    },
+    agents: agents.sort((left, right) => (right.requeue_percent ?? -1) - (left.requeue_percent ?? -1)),
+  };
 }
 
 app.get('/api/health', (_req: any, res: any) => {
   res.json({ status: 'ok', environment: process.env.NODE_ENV || 'production' });
 });
 
-// ─── AUTH ─────────────────────────────────────────────────────────────────────
-
 app.post('/api/login', async (req: any, res: any) => {
-  const { user_id, password } = req.body;
-  if (!supabase) return res.status(500).json({ error: 'Database not configured' });
-  const { data, error } = await supabase.from('users').select('*').eq('id', user_id).single();
-  if (error || !data) return res.status(401).json({ error: 'User not found' });
-  if (data.password !== password) return res.status(401).json({ error: 'Invalid password' });
-  res.json({ success: true, user: { id: data.id, name: data.name, team_id: data.team_id, role: data.role } });
+  const userId = Number(req.body?.user_id);
+  const password = String(req.body?.password ?? '');
+
+  if (!supabase) {
+    return jsonError(res, 500, 'Database not configured');
+  }
+
+  const user = await fetchUserById(userId);
+  if (!user) {
+    return jsonError(res, 401, 'User not found');
+  }
+
+  if ((user as any).password !== password) {
+    return jsonError(res, 401, 'Invalid password');
+  }
+
+  return res.json({
+    success: true,
+    user: {
+      id: user.id,
+      name: user.name,
+      team_id: user.team_id ?? null,
+      role: user.role,
+      email: user.email ?? null,
+      shift_start: user.shift_start,
+      shift_end: user.shift_end,
+      week_offs: user.week_offs,
+      timezone: user.timezone,
+    },
+  });
 });
 
 app.post('/api/admin/login', (req: any, res: any) => {
-  const { password } = req.body;
-  if (password !== (process.env.ADMIN_PASSWORD || 'tl@2024'))
-    return res.status(401).json({ error: 'Invalid password' });
-  res.json({ success: true });
+  const password = String(req.body?.password ?? '');
+  if (password !== (process.env.ADMIN_PASSWORD || 'tl@2024')) {
+    return jsonError(res, 401, 'Invalid password');
+  }
+
+  return res.json({ success: true });
 });
 
-// ─── TEAMS & MEMBERS ──────────────────────────────────────────────────────────
-
 app.get('/api/teams', async (_req: any, res: any) => {
-  if (!supabase) return res.status(500).json({ error: 'Database not configured' });
+  if (!supabase) {
+    return jsonError(res, 500, 'Database not configured');
+  }
+
   const { data, error } = await supabase.from('teams').select('*').order('name');
-  if (error) return res.status(500).json({ error: error.message });
-  res.json(data);
+  if (error) {
+    return jsonError(res, 500, error.message);
+  }
+
+  return res.json(Array.isArray(data) ? data : []);
 });
 
 app.get('/api/teams/:teamId/members', async (req: any, res: any) => {
-  if (!supabase) return res.status(500).json({ error: 'Database not configured' });
-  const { data, error } = await supabase.from('users').select('id, name')
-    .eq('team_id', req.params.teamId).eq('role', 'agent').order('name');
-  if (error) return res.status(500).json({ error: error.message });
-  res.json(data);
+  if (!supabase) {
+    return jsonError(res, 500, 'Database not configured');
+  }
+
+  const { data, error } = await supabase
+    .from('users')
+    .select('id, name')
+    .eq('team_id', Number(req.params.teamId))
+    .eq('role', 'agent')
+    .order('name');
+
+  if (error) {
+    return jsonError(res, 500, error.message);
+  }
+
+  return res.json(Array.isArray(data) ? data : []);
 });
 
-// ─── FILE UPLOAD ──────────────────────────────────────────────────────────────
-
 app.post('/api/upload', upload.single('file'), (req: any, res: any) => {
-  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+  if (!req.file) {
+    return jsonError(res, 400, 'No file uploaded');
+  }
+
   try {
-    const ext = path.extname(req.file.originalname).toLowerCase();
-    if (ext === '.csv') {
+    const extension = path.extname(req.file.originalname).toLowerCase();
+
+    if (extension === '.csv') {
       const codes: string[] = [];
+
       fs.createReadStream(req.file.path)
         .pipe(parse({ columns: true, skip_empty_lines: true }))
         .on('data', (row: any) => {
-          // Try to extract a code-like column
-          const val = Object.values(row)[0] as string;
-          if (val) codes.push(String(val).trim());
+          const value = Object.values(row)[0] as string;
+          if (value) {
+            codes.push(String(value).trim());
+          }
         })
         .on('end', () => {
-          fs.unlinkSync(req.file!.path);
-          res.json({ total_sessions: codes.length, codes });
+          fs.unlinkSync(req.file.path);
+          const normalized = normalizeCodes(codes);
+          res.json({ total_sessions: normalized.length, codes: normalized });
         })
         .on('error', () => {
-          fs.unlinkSync(req.file!.path);
-          res.status(500).json({ error: 'Failed to parse CSV' });
+          fs.unlinkSync(req.file.path);
+          jsonError(res, 500, 'Failed to parse CSV');
         });
-    } else if (ext === '.xlsx' || ext === '.xls') {
+      return;
+    }
+
+    if (extension === '.xlsx' || extension === '.xls') {
       const workbook = xlsx.readFile(req.file.path);
       const rows: any[] = xlsx.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]]);
-      const codes = rows.map((r: any) => String(Object.values(r)[0] || '').trim()).filter(Boolean);
+      const codes = normalizeCodes(rows.map((row: any) => Object.values(row)[0]));
       fs.unlinkSync(req.file.path);
-      res.json({ total_sessions: codes.length, codes });
-    } else {
-      fs.unlinkSync(req.file.path);
-      res.status(400).json({ error: 'Unsupported file type' });
+      return res.json({ total_sessions: codes.length, codes });
     }
-  } catch (e) {
-    if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
-    res.status(500).json({ error: 'Failed to process file' });
+
+    fs.unlinkSync(req.file.path);
+    return jsonError(res, 400, 'Unsupported file type');
+  } catch {
+    if (req.file && fs.existsSync(req.file.path)) {
+      fs.unlinkSync(req.file.path);
+    }
+
+    return jsonError(res, 500, 'Failed to process file');
   }
 });
 
-// ─── SUBMIT ───────────────────────────────────────────────────────────────────
+app.get('/api/agent/day-report', async (req: any, res: any) => {
+  if (!supabase) {
+    return jsonError(res, 500, 'Database not configured');
+  }
+
+  const userId = Number(getQueryString(req.query.user_id));
+  const date = getQueryString(req.query.date);
+
+  if (!userId || !isValidDateString(date)) {
+    return jsonError(res, 400, 'user_id and date are required');
+  }
+
+  return res.json(await buildDayReport(userId, date));
+});
 
 app.post('/api/submit', async (req: any, res: any) => {
-  const { user_id, date, total_sessions, id_retake, tech_issue, system_issue, codes } = req.body;
-  if (!user_id || !date || total_sessions === undefined || id_retake === undefined || tech_issue === undefined || system_issue === undefined)
-    return res.status(400).json({ error: 'Missing required fields' });
-  if ((id_retake + tech_issue + system_issue) > total_sessions)
-    return res.status(400).json({ error: 'Total requeues cannot exceed total sessions' });
-  if (!supabase) return res.status(500).json({ error: 'Database not configured' });
+  if (!supabase) {
+    return jsonError(res, 500, 'Database not configured');
+  }
 
-  try {
-    const { data: report, error } = await supabase
+  const userId = Number(req.body?.user_id);
+  const date = String(req.body?.date ?? '').trim();
+  const batchIdRetake = Number(req.body?.id_retake ?? 0);
+  const batchTechIssue = Number(req.body?.tech_issue ?? 0);
+  const batchSystemIssue = Number(req.body?.system_issue ?? 0);
+  const inputCodes = normalizeCodes(req.body?.codes);
+  const requestedSessions = Number(req.body?.total_sessions ?? inputCodes.length);
+
+  if (!userId || !isValidDateString(date)) {
+    return jsonError(res, 400, 'Missing required fields');
+  }
+
+  const user = await fetchUserById(userId);
+  if (!user) {
+    return jsonError(res, 404, 'User not found');
+  }
+
+  const localToday = zonedNowInfo(new Date(), user.timezone ?? 'Asia/Kolkata').dateKey;
+  if (date > localToday) {
+    return jsonError(res, 400, 'Future dates are not allowed');
+  }
+
+  const report = await fetchReportByUserDate(userId, date);
+  const existingCodes = report ? await fetchCodesForReport(Number(report.id)) : [];
+  const existingCodeSet = new Set(existingCodes.map((entry: any) => String(entry.code).trim()));
+  const acceptedCodes = inputCodes.filter((code) => !existingCodeSet.has(code));
+  const duplicateCodesIgnored = inputCodes.length - acceptedCodes.length;
+  const acceptedSessions = inputCodes.length > 0 ? acceptedCodes.length : requestedSessions;
+  const batchTotalRequeue = batchIdRetake + batchTechIssue + batchSystemIssue;
+
+  if (acceptedSessions <= 0) {
+    return jsonError(res, 400, 'No new sessions were found for this date');
+  }
+
+  if (batchTotalRequeue > acceptedSessions) {
+    return jsonError(res, 400, 'Batch requeues cannot exceed the accepted sessions in this upload');
+  }
+
+  let updatedReport: any = null;
+
+  if (!report) {
+    const { data, error } = await supabase
       .from('daily_reports')
-      .insert([{ user_id, date, total_sessions, id_retake, tech_issue, system_issue }])
-      .select('id')
+      .insert([{
+        user_id: userId,
+        date,
+        total_sessions: acceptedSessions,
+        id_retake: batchIdRetake,
+        tech_issue: batchTechIssue,
+        system_issue: batchSystemIssue,
+        updated_at: new Date().toISOString(),
+      }])
+      .select('*')
       .single();
-    if (error) throw error;
 
-    // Store access codes if provided
-    if (codes && Array.isArray(codes) && codes.length > 0 && report) {
-      const codeRows = codes.map((code: string) => ({ report_id: report.id, code: String(code).trim() }));
-      await supabase.from('access_codes').insert(codeRows);
+    if (error || !data) {
+      return jsonError(res, 500, error?.message || 'Failed to save data');
     }
 
-    res.json({ success: true });
-  } catch (e: any) {
-    res.status(500).json({ error: e.message || 'Failed to save data' });
+    updatedReport = data;
+  } else {
+    const { data, error } = await supabase
+      .from('daily_reports')
+      .update({
+        total_sessions: Number(report.total_sessions ?? 0) + acceptedSessions,
+        id_retake: Number(report.id_retake ?? 0) + batchIdRetake,
+        tech_issue: Number(report.tech_issue ?? 0) + batchTechIssue,
+        system_issue: Number(report.system_issue ?? 0) + batchSystemIssue,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', Number(report.id))
+      .select('*')
+      .single();
+
+    if (error || !data) {
+      return jsonError(res, 500, error?.message || 'Failed to update data');
+    }
+
+    updatedReport = data;
   }
+
+  if (acceptedCodes.length > 0) {
+    const codeRows = acceptedCodes.map((code) => ({ report_id: Number(updatedReport.id), code }));
+    const { error } = await supabase.from('access_codes').insert(codeRows);
+    if (error) {
+      return jsonError(res, 500, error.message);
+    }
+  }
+
+  return res.json({
+    success: true,
+    report: serializeReport(updatedReport),
+    accepted_sessions: acceptedSessions,
+    duplicate_codes_ignored: duplicateCodesIgnored,
+    codes_count: existingCodes.length + acceptedCodes.length,
+  });
 });
 
-// ─── ACCESS CODES ─────────────────────────────────────────────────────────────
-
-// Get codes for a specific report
 app.get('/api/report-codes', async (req: any, res: any) => {
-  if (!supabase) return res.status(500).json({ error: 'Database not configured' });
-  const { report_id } = req.query;
-  if (!report_id) return res.status(400).json({ error: 'report_id required' });
-  const { data, error } = await supabase
-    .from('access_codes').select('id, code, created_at')
-    .eq('report_id', report_id).order('id');
-  if (error) return res.status(500).json({ error: error.message });
-  res.json(data || []);
-});
+  if (!supabase) {
+    return jsonError(res, 500, 'Database not configured');
+  }
 
-// ─── AGENT ────────────────────────────────────────────────────────────────────
+  const reportId = Number(getQueryString(req.query.report_id));
+  if (!reportId) {
+    return jsonError(res, 400, 'report_id required');
+  }
+
+  return res.json(await fetchCodesForReport(reportId));
+});
 
 app.get('/api/agent/reports', async (req: any, res: any) => {
-  if (!supabase) return res.status(500).json({ error: 'Database not configured' });
-  const { user_name, month } = req.query;
-  if (!user_name) return res.status(400).json({ error: 'user_name required' });
-  let query = supabase.from('daily_reports').select('*').eq('user_id', user_name).order('date', { ascending: false });
-  if (month) {
-    const { start, end } = monthRange(month as string);
-    query = query.gte('date', start).lt('date', end);
+  if (!supabase) {
+    return jsonError(res, 500, 'Database not configured');
   }
-  const { data, error } = await query;
-  if (error) return res.status(500).json({ error: error.message });
-  res.json(data || []);
+
+  const user = await resolveUserFromQuery(req);
+  const month = getQueryString(req.query.month) || new Date().toISOString().slice(0, 7);
+
+  if (!user) {
+    return jsonError(res, 400, 'user_id required');
+  }
+
+  if (!isValidMonthString(month)) {
+    return jsonError(res, 400, 'month must be YYYY-MM');
+  }
+
+  return res.json(await buildUserReportsPayload(user, month));
 });
 
-// ─── ADMIN ────────────────────────────────────────────────────────────────────
-
 app.get('/api/admin/summary', async (req: any, res: any) => {
-  if (!supabase) return res.status(500).json({ error: 'Database not configured' });
-  try {
-    const date = req.query.date || new Date().toISOString().split('T')[0];
-    const { data: reports, error } = await supabase.from('daily_reports').select('*').eq('date', date);
-    if (error) throw error;
+  if (!supabase) {
+    return jsonError(res, 500, 'Database not configured');
+  }
 
-    let total_sessions = 0, total_id_retake = 0, total_tech_issue = 0, total_system_issue = 0;
-    const agents = (reports || []).map((r: any) => {
-      total_sessions += r.total_sessions; total_id_retake += r.id_retake;
-      total_tech_issue += r.tech_issue; total_system_issue += r.system_issue;
-      const rq = r.id_retake + r.tech_issue + r.system_issue;
-      return { id: r.id, user_id: r.user_id, total_sessions: r.total_sessions, id_retake: r.id_retake, tech_issue: r.tech_issue, system_issue: r.system_issue, requeue_percent: r.total_sessions > 0 ? (rq / r.total_sessions) * 100 : 0 };
-    });
+  const requestedDate = getQueryString(req.query.date) || new Date().toISOString().slice(0, 10);
+  if (!isValidDateString(requestedDate)) {
+    return jsonError(res, 400, 'date must be YYYY-MM-DD');
+  }
 
-    const total_requeue = total_id_retake + total_tech_issue + total_system_issue;
-    const agent_count = agents.length;
-    const session_avg = agent_count > 0 ? (total_sessions / agent_count) : 0;
-    const issues = [{ name: 'ID Retake', count: total_id_retake }, { name: 'Tech Issue', count: total_tech_issue }, { name: 'System Issue', count: total_system_issue }].sort((a, b) => b.count - a.count);
-    agents.sort((a: any, b: any) => b.requeue_percent - a.requeue_percent);
-
-    res.json({ totals: { total_sessions, total_requeue, requeue_percent: total_sessions > 0 ? (total_requeue / total_sessions) * 100 : 0, top_issue: issues[0].count > 0 ? issues[0].name : 'None', session_avg, agent_count }, agents });
-  } catch (e: any) { res.status(500).json({ error: e.message || 'Failed to fetch summary' }); }
+  return res.json(await buildDailySummaryForDate(requestedDate));
 });
 
 app.get('/api/admin/monthly', async (req: any, res: any) => {
-  if (!supabase) return res.status(500).json({ error: 'Database not configured' });
-  const month = (req.query.month as string) || new Date().toISOString().slice(0, 7);
-  const { start, end } = monthRange(month);
-  const { data: reports, error } = await supabase.from('daily_reports').select('*').gte('date', start).lt('date', end);
-  if (error) return res.status(500).json({ error: error.message });
-
-  const byUser: Record<string, any> = {};
-  for (const r of reports || []) {
-    if (!byUser[r.user_id]) byUser[r.user_id] = { user_id: r.user_id, total_sessions: 0, id_retake: 0, tech_issue: 0, system_issue: 0, days: 0 };
-    byUser[r.user_id].total_sessions += r.total_sessions;
-    byUser[r.user_id].id_retake += r.id_retake;
-    byUser[r.user_id].tech_issue += r.tech_issue;
-    byUser[r.user_id].system_issue += r.system_issue;
-    byUser[r.user_id].days++;
+  if (!supabase) {
+    return jsonError(res, 500, 'Database not configured');
   }
-  const agents = Object.values(byUser).map((a: any) => ({
-    ...a,
-    total_requeue: a.id_retake + a.tech_issue + a.system_issue,
-    requeue_percent: a.total_sessions > 0 ? ((a.id_retake + a.tech_issue + a.system_issue) / a.total_sessions * 100).toFixed(2) : '0.00',
-    session_avg: a.days > 0 ? (a.total_sessions / a.days).toFixed(1) : '0.0',
-  })).sort((a: any, b: any) => parseFloat(b.requeue_percent) - parseFloat(a.requeue_percent));
 
-  res.json({ month, agents });
+  const month = getQueryString(req.query.month) || new Date().toISOString().slice(0, 7);
+  if (!isValidMonthString(month)) {
+    return jsonError(res, 400, 'month must be YYYY-MM');
+  }
+
+  const { start, end } = monthRange(month);
+  const [users, reportsResponse, leavesResponse] = await Promise.all([
+    fetchAgentUsers(),
+    supabase.from('daily_reports').select('*').gte('date', start).lt('date', end),
+    supabase.from('leave_dates').select('*').gte('date', start).lt('date', end),
+  ]);
+
+  const reports = Array.isArray(reportsResponse.data) ? reportsResponse.data : [];
+  const leaves = Array.isArray(leavesResponse.data) ? leavesResponse.data : [];
+  const reportsByUser = new Map<number, any[]>();
+  const leavesByUser = new Map<number, any[]>();
+
+  for (const report of reports) {
+    const userId = Number(report.user_id);
+    const entries = reportsByUser.get(userId) ?? [];
+    entries.push(report);
+    reportsByUser.set(userId, entries);
+  }
+
+  for (const leave of leaves) {
+    const userId = Number(leave.user_id);
+    const entries = leavesByUser.get(userId) ?? [];
+    entries.push(leave);
+    leavesByUser.set(userId, entries);
+  }
+
+  let teamSessions = 0;
+  let teamRequeue = 0;
+  let teamWorkingDays = 0;
+  let teamSubmittedDays = 0;
+
+  const agents = users.map((user) => {
+    const userReports = (reportsByUser.get(user.id) ?? []).map(serializeReport);
+    const userLeaves = leavesByUser.get(user.id) ?? [];
+    const leaveDates = new Set(userLeaves.map((leave: any) => String(leave.date)));
+    const { workingDays, leaveDays, weekOffDays } = countWorkingDays(start, end, user, leaveDates);
+    const totals = summarizeReports(userReports as any);
+    const totalRequeue = totals.idRetake + totals.techIssue + totals.systemIssue;
+
+    teamSessions += totals.totalSessions;
+    teamRequeue += totalRequeue;
+    teamWorkingDays += workingDays;
+    teamSubmittedDays += userReports.length;
+
+    return {
+      user_id: user.id,
+      user_name: user.name,
+      email: user.email ?? null,
+      timezone: user.timezone,
+      shift_start: user.shift_start,
+      shift_end: user.shift_end,
+      week_offs: user.week_offs,
+      working_days: workingDays,
+      submitted_days: userReports.length,
+      leave_days: leaveDays,
+      week_off_days: weekOffDays,
+      total_sessions: totals.totalSessions,
+      id_retake: totals.idRetake,
+      tech_issue: totals.techIssue,
+      system_issue: totals.systemIssue,
+      total_requeue: totalRequeue,
+      requeue_percent: totals.totalSessions > 0 ? (totalRequeue / totals.totalSessions) * 100 : null,
+      session_avg: workingDays > 0 ? totals.totalSessions / workingDays : null,
+    };
+  }).sort((left, right) => (right.requeue_percent ?? -1) - (left.requeue_percent ?? -1));
+
+  return res.json({
+    month,
+    summary: {
+      total_sessions: teamSessions,
+      total_requeue: teamRequeue,
+      requeue_percent: teamSessions > 0 ? (teamRequeue / teamSessions) * 100 : null,
+      working_days: teamWorkingDays,
+      submitted_days: teamSubmittedDays,
+      session_avg: teamWorkingDays > 0 ? teamSessions / teamWorkingDays : null,
+      agent_count: users.length,
+    },
+    agents,
+  });
 });
 
 app.get('/api/admin/agents', async (_req: any, res: any) => {
-  if (!supabase) return res.status(500).json({ error: 'Database not configured' });
-  const { data, error } = await supabase.from('users').select('id, name, team_id').eq('role', 'agent').order('name');
-  if (error) return res.status(500).json({ error: error.message });
-  res.json(data || []);
+  if (!supabase) {
+    return jsonError(res, 500, 'Database not configured');
+  }
+
+  return res.json(await fetchAgentUsers());
 });
 
 app.get('/api/admin/user-reports', async (req: any, res: any) => {
-  if (!supabase) return res.status(500).json({ error: 'Database not configured' });
-  const { user_name, month } = req.query;
-  if (!user_name) return res.status(400).json({ error: 'user_name required' });
-  let query = supabase.from('daily_reports').select('*').eq('user_id', user_name).order('date', { ascending: false });
-  if (month) {
-    const { start, end } = monthRange(month as string);
-    query = query.gte('date', start).lt('date', end);
+  if (!supabase) {
+    return jsonError(res, 500, 'Database not configured');
   }
-  const { data, error } = await query;
-  if (error) return res.status(500).json({ error: error.message });
-  res.json(data || []);
+
+  const user = await resolveUserFromQuery(req);
+  const month = getQueryString(req.query.month) || new Date().toISOString().slice(0, 7);
+
+  if (!user) {
+    return jsonError(res, 400, 'user_id required');
+  }
+
+  if (!isValidMonthString(month)) {
+    return jsonError(res, 400, 'month must be YYYY-MM');
+  }
+
+  return res.json(await buildUserReportsPayload(user, month));
 });
 
-// ─── EMAIL REPORT ─────────────────────────────────────────────────────────────
+app.get('/api/admin/leaves', async (req: any, res: any) => {
+  if (!supabase) {
+    return jsonError(res, 500, 'Database not configured');
+  }
 
-app.all('/api/report', async (_req: any, res: any) => {
-  if (!supabase) return res.status(500).json({ error: 'Database not configured' });
-  try {
-    const today = new Date().toISOString().split('T')[0];
-    const { data: reports, error } = await supabase.from('daily_reports').select('*').eq('date', today);
-    if (error) throw error;
-    if (!reports || reports.length === 0) return res.json({ success: true, message: 'No reports today' });
+  const userId = Number(getQueryString(req.query.user_id));
+  const month = getQueryString(req.query.month) || new Date().toISOString().slice(0, 7);
 
-    let total_sessions = 0, total_id_retake = 0, total_tech_issue = 0, total_system_issue = 0, agentRows = '';
-    for (const r of reports) {
-      total_sessions += r.total_sessions; total_id_retake += r.id_retake;
-      total_tech_issue += r.tech_issue; total_system_issue += r.system_issue;
-      const rq = r.id_retake + r.tech_issue + r.system_issue;
-      agentRows += `<tr><td style="border:1px solid #ddd;padding:8px">${r.user_id}</td><td style="border:1px solid #ddd;padding:8px">${r.total_sessions}</td><td style="border:1px solid #ddd;padding:8px">${r.id_retake}</td><td style="border:1px solid #ddd;padding:8px">${r.tech_issue}</td><td style="border:1px solid #ddd;padding:8px">${r.system_issue}</td><td style="border:1px solid #ddd;padding:8px">${r.total_sessions > 0 ? ((rq / r.total_sessions) * 100).toFixed(2) : '0.00'}%</td><td style="border:1px solid #ddd;padding:8px">${r.total_sessions > 0 ? (r.total_sessions / 1).toFixed(0) : '0'}</td></tr>`;
+  if (!userId || !isValidMonthString(month)) {
+    return jsonError(res, 400, 'user_id and month are required');
+  }
+
+  const { start, end } = monthRange(month);
+  return res.json(await fetchLeavesByUserAndRange(userId, start, end));
+});
+
+app.post('/api/admin/leaves', async (req: any, res: any) => {
+  if (!supabase) {
+    return jsonError(res, 500, 'Database not configured');
+  }
+
+  const userId = Number(req.body?.user_id);
+  const date = String(req.body?.date ?? '').trim();
+  const reason = String(req.body?.reason ?? '').trim() || null;
+
+  if (!userId || !isValidDateString(date)) {
+    return jsonError(res, 400, 'user_id and valid date are required');
+  }
+
+  const { data, error } = await supabase
+    .from('leave_dates')
+    .insert([{ user_id: userId, date, reason }])
+    .select('*')
+    .single();
+
+  if (error || !data) {
+    return jsonError(res, 500, error?.message || 'Failed to create leave');
+  }
+
+  return res.json({ success: true, leave: data });
+});
+
+app.delete('/api/admin/leaves/:id', async (req: any, res: any) => {
+  if (!supabase) {
+    return jsonError(res, 500, 'Database not configured');
+  }
+
+  const leaveId = Number(req.params.id);
+  if (!leaveId) {
+    return jsonError(res, 400, 'leave id required');
+  }
+
+  const { error } = await supabase.from('leave_dates').delete().eq('id', leaveId);
+  if (error) {
+    return jsonError(res, 500, error.message);
+  }
+
+  return res.json({ success: true });
+});
+
+app.patch('/api/admin/users/:id', async (req: any, res: any) => {
+  if (!supabase) {
+    return jsonError(res, 500, 'Database not configured');
+  }
+
+  const userId = Number(req.params.id);
+  if (!userId) {
+    return jsonError(res, 400, 'user id required');
+  }
+
+  const email = String(req.body?.email ?? '').trim() || null;
+  const shiftStart = safeTime(req.body?.shift_start, '09:00');
+  const shiftEnd = safeTime(req.body?.shift_end, '18:00');
+  const timezone = safeTimeZone(String(req.body?.timezone ?? 'Asia/Kolkata').trim());
+  const weekOffs = normalizeWeekOffs(req.body?.week_offs);
+
+  const { data, error } = await supabase
+    .from('users')
+    .update({
+      email,
+      shift_start: shiftStart,
+      shift_end: shiftEnd,
+      timezone,
+      week_offs: weekOffs,
+    })
+    .eq('id', userId)
+    .select('*')
+    .single();
+
+  if (error || !data) {
+    return jsonError(res, 500, error?.message || 'Failed to update user');
+  }
+
+  return res.json({ success: true, user: defaultUser(data) });
+});
+
+app.get('/api/cron/reminders', async (_req: any, res: any) => {
+  if (!supabase) {
+    console.error('Database not configured. Reminder cron skipped.');
+    return jsonError(res, 500, 'Database not configured');
+  }
+
+  const users = await fetchAgentUsers();
+  const now = new Date();
+  const utcDate = now.toISOString().slice(0, 10);
+  const windowStart = addDays(utcDate, -1);
+  const windowEnd = addDays(utcDate, 2);
+
+  const [reportsResponse, leavesResponse, remindersResponse] = await Promise.all([
+    supabase.from('daily_reports').select('user_id, date').gte('date', windowStart).lt('date', windowEnd),
+    supabase.from('leave_dates').select('user_id, date').gte('date', windowStart).lt('date', windowEnd),
+    supabase.from('report_reminders').select('user_id, reminder_date, kind').gte('reminder_date', windowStart).lt('reminder_date', windowEnd),
+  ]);
+
+  const reportKeys = new Set<string>((reportsResponse.data || []).map((report: any) => `${Number(report.user_id)}:${report.date}`));
+  const leaveKeys = new Set<string>((leavesResponse.data || []).map((leave: any) => `${Number(leave.user_id)}:${leave.date}`));
+  const reminderKeys = new Set<string>((remindersResponse.data || []).map((entry: any) => `${Number(entry.user_id)}:${entry.reminder_date}:${entry.kind}`));
+
+  let sent = 0;
+  let skipped = 0;
+  const details: Array<{ user_id: number; user_name: string; status: string; date: string }> = [];
+
+  for (const user of users) {
+    const localNow = zonedNowInfo(now, user.timezone ?? 'Asia/Kolkata');
+    const shiftEndMinutes = timeToMinutes(user.shift_end ?? '18:00');
+    const leaveDates = new Set<string>();
+    if (leaveKeys.has(`${user.id}:${localNow.dateKey}`)) {
+      leaveDates.add(localNow.dateKey);
     }
-    const total_requeues = total_id_retake + total_tech_issue + total_system_issue;
-    const session_avg = reports.length > 0 ? (total_sessions / reports.length).toFixed(1) : '0';
-    const resend = new Resend(process.env.RESEND_API_KEY!);
+
+    if (localNow.minutes < shiftEndMinutes) {
+      skipped += 1;
+      details.push({ user_id: user.id, user_name: user.name, status: 'before_shift_end', date: localNow.dateKey });
+      continue;
+    }
+
+    if (localNow.minutes >= (shiftEndMinutes + reminderGraceMinutes)) {
+      skipped += 1;
+      details.push({ user_id: user.id, user_name: user.name, status: 'outside_window', date: localNow.dateKey });
+      continue;
+    }
+
+    if (!isWorkingDay(localNow.dateKey, user, leaveDates)) {
+      skipped += 1;
+      details.push({ user_id: user.id, user_name: user.name, status: leaveDates.has(localNow.dateKey) ? 'leave' : 'week_off', date: localNow.dateKey });
+      continue;
+    }
+
+    if (reportKeys.has(`${user.id}:${localNow.dateKey}`)) {
+      skipped += 1;
+      details.push({ user_id: user.id, user_name: user.name, status: 'already_submitted', date: localNow.dateKey });
+      continue;
+    }
+
+    if (reminderKeys.has(`${user.id}:${localNow.dateKey}:missing_report`)) {
+      skipped += 1;
+      details.push({ user_id: user.id, user_name: user.name, status: 'already_reminded', date: localNow.dateKey });
+      continue;
+    }
+
+    const delivered = await sendReminder(user, localNow.dateKey);
+    if (!delivered) {
+      skipped += 1;
+      details.push({ user_id: user.id, user_name: user.name, status: 'delivery_skipped', date: localNow.dateKey });
+      continue;
+    }
+
+    const { error } = await supabase.from('report_reminders').insert([{
+      user_id: user.id,
+      reminder_date: localNow.dateKey,
+      kind: 'missing_report',
+    }]);
+
+    if (error) {
+      console.error(`Reminder log insert failed for ${user.name}:`, error);
+      skipped += 1;
+      details.push({ user_id: user.id, user_name: user.name, status: 'log_failed', date: localNow.dateKey });
+      continue;
+    }
+
+    sent += 1;
+    details.push({ user_id: user.id, user_name: user.name, status: 'sent', date: localNow.dateKey });
+  }
+
+  return res.json({
+    success: true,
+    evaluated: users.length,
+    sent,
+    skipped,
+    grace_minutes: reminderGraceMinutes,
+    details,
+  });
+});
+
+app.all('/api/report', async (req: any, res: any) => {
+  try {
+    if (!supabase) {
+      console.error('Database not configured. Daily report skipped.');
+      return jsonError(res, 500, 'Database not configured');
+    }
+
+    const date = getQueryString(req.query.date) || new Date().toISOString().slice(0, 10);
+    if (!isValidDateString(date)) {
+      return jsonError(res, 400, 'date must be YYYY-MM-DD');
+    }
+
+    const summary = await buildDailySummaryForDate(date);
+    if (!summary.agents.some((agent) => agent.submitted)) {
+      return res.json({ success: true, message: 'No reports submitted for this date' });
+    }
+
+    if (!process.env.TEAM_LEAD_EMAIL) {
+      console.log(`TEAM_LEAD_EMAIL not configured. Daily summary generated for ${date}.`);
+      return res.json({ success: true, message: 'Summary generated without email delivery', summary });
+    }
+
+    if (!resend) {
+      console.log(`Resend not configured. Daily summary generated for ${date}.`);
+      return res.json({ success: true, message: 'Summary generated without email delivery', summary });
+    }
+
+    const rows = summary.agents
+      .filter((agent) => agent.submitted)
+      .map((agent) => `
+        <tr>
+          <td style="border:1px solid #ddd;padding:8px">${agent.user_name}</td>
+          <td style="border:1px solid #ddd;padding:8px">${agent.total_sessions}</td>
+          <td style="border:1px solid #ddd;padding:8px">${agent.id_retake}</td>
+          <td style="border:1px solid #ddd;padding:8px">${agent.tech_issue}</td>
+          <td style="border:1px solid #ddd;padding:8px">${agent.system_issue}</td>
+          <td style="border:1px solid #ddd;padding:8px">${agent.requeue_percent === null ? '-' : `${agent.requeue_percent.toFixed(2)}%`}</td>
+        </tr>
+      `)
+      .join('');
+
     await resend.emails.send({
-      from: 'Ops System <onboarding@resend.dev>', to: process.env.TEAM_LEAD_EMAIL!,
-      subject: `Daily Ops Report - ${today}`,
-      html: `<h2>Daily Ops Report - ${today}</h2>
-        <p><b>Sessions:</b> ${total_sessions} | <b>Session Avg:</b> ${session_avg} | <b>Requeues:</b> ${total_requeues} | <b>Rate:</b> ${total_sessions > 0 ? ((total_requeues / total_sessions) * 100).toFixed(2) : 0}%</p>
+      from: 'Ops System <onboarding@resend.dev>',
+      to: process.env.TEAM_LEAD_EMAIL,
+      subject: `Daily Ops Summary - ${date}`,
+      html: `
+        <h2>Daily Ops Summary - ${date}</h2>
+        <p>
+          <b>Sessions:</b> ${summary.totals.total_sessions}
+          | <b>Working Agents:</b> ${summary.totals.working_agent_count}
+          | <b>Submitted:</b> ${summary.totals.submitted_agent_count}
+          | <b>Session Avg:</b> ${summary.totals.session_avg === null ? '-' : summary.totals.session_avg.toFixed(1)}
+          | <b>Requeues:</b> ${summary.totals.total_requeue}
+        </p>
         <table style="border-collapse:collapse;width:100%">
-          <thead><tr style="background:#f2f2f2">
-            <th style="border:1px solid #ddd;padding:8px">Agent</th><th style="border:1px solid #ddd;padding:8px">Sessions</th>
-            <th style="border:1px solid #ddd;padding:8px">ID Retake</th><th style="border:1px solid #ddd;padding:8px">Tech Transfer</th>
-            <th style="border:1px solid #ddd;padding:8px">System Issue</th><th style="border:1px solid #ddd;padding:8px">Requeue %</th>
-            <th style="border:1px solid #ddd;padding:8px">Session Avg</th>
-          </tr></thead>
-          <tbody>${agentRows}</tbody>
-        </table>`
+          <thead>
+            <tr style="background:#f2f2f2">
+              <th style="border:1px solid #ddd;padding:8px">Agent</th>
+              <th style="border:1px solid #ddd;padding:8px">Sessions</th>
+              <th style="border:1px solid #ddd;padding:8px">ID Retake</th>
+              <th style="border:1px solid #ddd;padding:8px">Tech Transfer</th>
+              <th style="border:1px solid #ddd;padding:8px">System Issue</th>
+              <th style="border:1px solid #ddd;padding:8px">Requeue %</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      `,
     });
-    res.json({ success: true, message: 'Report sent' });
-  } catch (e: any) { res.status(500).json({ error: e.message || 'Failed' }); }
+
+    return res.json({ success: true, message: 'Report sent', summary });
+  } catch (error: any) {
+    return jsonError(res, 500, error?.message || 'Failed to send report');
+  }
 });
 
 export default app;

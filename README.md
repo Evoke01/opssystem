@@ -28,6 +28,7 @@ This starts the Express server on `http://localhost:3000` and serves the Vite ap
 - `ADMIN_PASSWORD`: Team lead login password.
 - `RESEND_API_KEY`: Resend API key for daily summary emails.
 - `TEAM_LEAD_EMAIL`: Recipient address for the daily summary.
+- `REMINDER_GRACE_MINUTES`: Optional reminder window after shift end. Defaults to `30`.
 - `SUPABASE_URL` and `SUPABASE_ANON_KEY`: Supabase project credentials used by the backend.
 
 ## Cloudflare deployment
@@ -65,7 +66,9 @@ The backend exposes a simple health endpoint at `/api/health` for validation aft
 
 ## Supabase schema
 
-Run `schema.sql` in your Supabase SQL editor to create the required tables and example seed data.
+Run `schema.sql` in your Supabase SQL editor for fresh installs.
+
+For existing databases, run `migrations/20260401_incremental_reporting.sql` first so old name-based report rows are backfilled to numeric user ids, duplicate same-day rows are consolidated, and the new leave/reminder tables are created.
 
 ## Legacy Vercel files
 

@@ -9,8 +9,8 @@ const isVercel = Boolean(process.env.VERCEL);
 const isProduction = process.env.NODE_ENV === 'production';
 
 async function triggerDailyReport() {
-  const response = await fetch(`http://127.0.0.1:${PORT}/api/report`, {
-    method: 'POST',
+  const response = await fetch(`http://127.0.0.1:${PORT}/api/cron/reminders`, {
+    method: 'GET',
   });
 
   if (!response.ok) {
@@ -20,8 +20,8 @@ async function triggerDailyReport() {
 }
 
 if (!isVercel) {
-  cron.schedule('0 18 * * *', () => {
-    console.log('Running daily report cron job');
+  cron.schedule('*/15 * * * *', () => {
+    console.log('Running reminder cron job');
     void triggerDailyReport().catch((error) => {
       console.error('Cron job failed:', error);
     });
