@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="faviconTitle">
+  <title id="faviconTitle">Daily Ops System</title>
+  <defs>
+    <linearGradient id="opsBlue" x1="8" y1="8" x2="56" y2="56" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#3b82f6" />
+      <stop offset="1" stop-color="#1d4ed8" />
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="18" fill="url(#opsBlue)" />
+  <path
+    d="M32 15c-9.389 0-17 7.611-17 17s7.611 17 17 17c5.302 0 10.035-2.43 13.152-6.238l-5.721-4.685A9.513 9.513 0 0 1 32 41.5c-5.247 0-9.5-4.253-9.5-9.5s4.253-9.5 9.5-9.5c4.512 0 8.288 3.146 9.256 7.365H30.5V36h18c.132-1.027.2-2.074.2-3.142C48.7 22.992 41.085 15 32 15Z"
+    fill="#ffffff"
+  />
+</svg>
